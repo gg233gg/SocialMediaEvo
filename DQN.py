@@ -37,8 +37,9 @@ memory = deque(maxlen=memory_size)
 
 # 初始化智能体
 gat_encoder = GATEncoder(input_dim=1, hidden_dim=state_dim//4).to(device)  # 共享GAT编码器
-agents = [DQNAgent(state_dim, action_dim).to(device) for _ in range(n_nodes)]
-targets = [DQNAgent(state_dim, action_dim).to(device) for _ in range(n_nodes)]
+actual_state_dim = gat_encoder.out_dim  # 获取实际GAT输出维度
+agents = [DQNAgent(state_dim=actual_state_dim, action_dim=action_dim).to(device) for _ in range(n_nodes)]
+targets = [DQNAgent(state_dim=actual_state_dim, action_dim=action_dim).to(device) for _ in range(n_nodes)]
 optimizers = [optim.Adam(agents[i].parameters(), lr=lr) for i in range(n_nodes)]
 
 # 目标网络同步
@@ -56,22 +57,31 @@ def select_action(agent, state, epsilon):
             return q_values.argmax().item()
 
 # 训练单个智能体
+# 修改训练函数以处理可能的维度不匹配问题
 def train_agent(agent, target, optimizer, batch):
     states, actions, rewards, next_states = zip(*batch)
     states = torch.stack(states)
     actions = torch.tensor(actions, dtype=torch.long).to(device)
     rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
     next_states = torch.stack(next_states)
-
-    current_q = agent(states).gather(1, actions.unsqueeze(1)).squeeze()
+    
+    # 获取当前Q值
+    q_values = agent(states)
+    current_q = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
+    
+    # 计算目标Q值
     with torch.no_grad():
-        max_next_q = target(next_states).max(1)[0]
+        next_q_values = target(next_states)
+        max_next_q = next_q_values.max(1)[0]
         expected_q = rewards + gamma * max_next_q
 
+    # 计算损失并更新
     loss = F.mse_loss(current_q, expected_q)
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
+    
+    return loss.item()
 
 # 训练循环
 update_targets()
